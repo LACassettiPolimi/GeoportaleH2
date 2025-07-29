@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Geoportale Hydrogen Demand</title>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; width: 100%; font-family: Arial, sans-serif; }
+        /* Sidebar */
+        #sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 500px;
+            height: 100%;
+            background: #fff;
+            border-right: 1px solid #ccc;
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        /* Map */
+        #map {
+            position: fixed;
+            top: 0;
+            left: 500px;
+            right: 0;
+            bottom: 0;
+        }
+
+        /* Iframe */
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        /* Pulsanti risoluzione: larghezza limitata e box-sizing */
+        .res-button {
+            flex: 1 1 45%;
+            max-width: 45%;
+            box-sizing: border-box;
+            padding: 8px;
+            text-align: center;
+            border: 1px solid #007bff;
+            border-radius: 4px;
+            cursor: pointer;
+            user-select: none;
+            background-color: white;
+            color: #007bff;
+            font-size: 14px;
+        }
+        .res-button.selected {
+            background-color: #007bff;
+            color: white;
+        }
+
+        label {
+        display: block;
+        margin-top: 1em;
+        font-weight: bold;
+        }
+
+        .select2-container {
+        width: 90% !important;
+        max-width: 90% !important;
+        box-sizing: border-box;
+        }
+
+        .select2-selection {
+        width: 100% !important;
+        box-sizing: border-box;
+        }
+
+
+        .select2-selection__choice {
+            padding: 1px 22px 1px 8px !important; /* meno verticale, abbastanza spazio a destra per la x */
+            line-height: 18px !important;         /* altezza più compatta */
+            font-size: 13px;
+            border-radius: 4px !important;
+            margin: 2px 3px !important;
+            position: relative;
+        }
+
+        /* Bottone x nera a sinistra (vicino testo) */
+        .select2-selection__choice__remove {
+            position: absolute !important;
+            left: 4px !important;
+            top: 50% !important;
+            transform: translateY(-50%);
+            color: black !important;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 0 2px;
+        }
+
+        /* Rimuove x standard in alto a destra */
+        .select2-selection__choice__remove:not(:first-child) {
+            display: none !important;
+        }
+    </style>
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>🔧 Impostazioni mappa</h2>
+        <form id="controls" method="get">
+            <h3>📊 Data Selection</h3>
+            {% for col in demand_columns %}
+                <input type="checkbox" name="selected_columns" value="{{ col }}" {% if col in selected_columns %}checked{% endif %}> {{ col }}<br>
+            {% endfor %}
+            <input type="checkbox" name="total" value="true" {% if 'tot_demand' in selected_columns %}checked{% endif %}> Total Demand<br>
+
+            <h3>🗺️ Spatial Resolution</h3>
+            <div id="resolution-buttons" style="display: flex; flex-wrap: wrap; gap: 5px;">
+                {% for opt in res_options %}
+                <label
+                    class="res-button {% if opt == res_selection %}selected{% endif %}"
+                    data-value="{{ opt }}"
+                    style="font-size: 14px;"
+                >
+                    <input
+                        type="radio"
+                        name="res_selection"
+                        value="{{ opt }}"
+                        {% if opt == res_selection %}checked{% endif %}
+                        style="display: none;">
+                    {{ opt }}
+                </label>
+                {% endfor %}
+            </div>
+
+            <h3>🌍 Spatial Filters</h3>
+            <label for="regions">Regioni:</label>
+            <select id="regions" name="regions" multiple="multiple" style="width:100%;">
+                {% for reg in regions %}
+                    <option value="{{ reg }}" {% if reg in selected_regions %}selected{% endif %}>{{ reg }}</option>
+                {% endfor %}
+            </select>
+            <label for="provinces" style="margin-top:10px;">Province:</label>
+            <select id="provinces" name="provinces" multiple="multiple" style="width:100%;">
+                {% for prov in provinces %}
+                    <option value="{{ prov }}" {% if prov in selected_provinces %}selected{% endif %}>{{ prov }}</option>
+                {% endfor %}
+            </select>
+            <label for="municipalities" style="margin-top:10px;">Comuni:</label>
+            <select id="municipalities" name="municipalities" multiple="multiple" style="width:100%;">
+                {% for com in municipalities %}
+                    <option value="{{ com }}" {% if com in selected_municipalities %}selected{% endif %}>{{ com }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" style="margin-top:12px;">🔄 Aggiorna mappa</button>
+            <button type="button" id="export-btn" style="margin-top:8px; background:#28a745;">⬇️ Esporta dati</button>
+        </form>
+    </div>
+
+    <div id="map">
+        <iframe id="map-iframe" src="/static/latest_map.html"></iframe>
+    </div>
+
+    <script>
+        function setupSelect2(id, placeholderText) {
+            $('#' + id).select2({
+                placeholder: placeholderText,
+                allowClear: true,
+                width: '100%',
+                templateSelection: function (data) {
+                    if (!data.id) { return data.text; }
+                    return $('<span style="display:flex;align-items:center;">'
+                        + '<span class="remove-tag" style="color:black;font-weight:bold;margin-right:5px;cursor:pointer;">&#10006;</span>'
+                        + '<span>' + data.text + '</span></span>');
+                }
+            });
+
+            $('#' + id).on('select2:select select2:unselect', function () {
+                updateRemoveAllButton(id);
+            });
+
+            $('#' + id).on('select2:opening', function() {
+                setTimeout(() => {
+                    $('.remove-tag').off().on('click', function(e) {
+                        e.stopPropagation();
+                        let val = $(this).next().text();
+                        let select = $('#' + id);
+                        let selected = select.val();
+                        if (selected) {
+                            let newSelected = selected.filter(item => item !== val);
+                            select.val(newSelected).trigger('change');
+                        }
+                    });
+                }, 100);
+            });
+        }
+
+
+        $(document).ready(function() {
+            setupSelect2('regions', 'Seleziona Regioni');
+            setupSelect2('provinces', 'Seleziona Province');
+            setupSelect2('municipalities', 'Seleziona Comuni');
+
+            $('#resolution-buttons label').click(function() {
+                $('#resolution-buttons label').removeClass('selected');
+                $(this).addClass('selected');
+            });
+        });
+        $('#export-btn').click(function() {
+            // Prendi i valori dei filtri dal form
+            let params = new URLSearchParams();
+
+            // Seleziona le colonne selezionate
+            $('input[name="selected_columns"]:checked').each(function() {
+                params.append('selected_columns', this.value);
+            });
+
+            // Aggiungi 'total' se selezionato
+            if ($('input[name="total"]').is(':checked')) {
+                params.append('selected_columns', 'tot_demand');
+            }
+
+            // Risoluzione selezionata
+            params.append('res_selection', $('input[name="res_selection"]:checked').val() || $('#resolution-buttons label.selected').data('value'));
+
+            // Filtri multipli
+            $('#regions').val()?.forEach(val => params.append('regions', val));
+            $('#provinces').val()?.forEach(val => params.append('provinces', val));
+            $('#municipalities').val()?.forEach(val => params.append('municipalities', val));
+
+            // Redirect per scaricare CSV
+            const url = '/export_csv?' + params.toString();
+            window.open(url, '_blank');
+        });
+    </script>
+
+</body>
+</html>
