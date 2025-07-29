@@ -4,3 +4,7 @@ geopandas
 pandas
 shapely
 jinja2
+folium
+urllib
+io
+branca
